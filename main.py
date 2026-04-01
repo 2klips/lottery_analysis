@@ -1,0 +1,152 @@
+"""Main entry point for Pension Lottery 720+ collection and prediction."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from src.collector.fetcher import PensionFetcher, FetchError
+from src.collector.parser import LotteryParser
+from src.storage.database import LotteryDatabase
+from src.utils.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+DATA_DIR = Path(__file__).parent / "data"
+EXPORT_PATH = DATA_DIR / "exports" / "lottery_data.json"
+
+
+def collect_data(db: LotteryDatabase) -> int:
+    """Fetch all rounds from API and store in database.
+
+    Args:
+        db: Active database connection.
+
+    Returns:
+        Number of newly inserted rounds.
+    """
+    fetcher = PensionFetcher()
+    try:
+        logger.info("Fetching all rounds from API...")
+        raw_json = fetcher.fetch_all_rounds()
+        rounds = LotteryParser.parse_round_list(raw_json)
+        logger.info("Parsed %d rounds from API", len(rounds))
+
+        if not rounds:
+            logger.warning("No rounds parsed from API response")
+            return 0
+
+        inserted = db.insert_rounds(rounds)
+        latest = max(r.round_number for r in rounds)
+        db.save_progress(latest)
+        logger.info(
+            "Inserted %d new rounds (total in DB: %d, latest: %d)",
+            inserted,
+            db.get_round_count(),
+            latest,
+        )
+        return inserted
+    except FetchError as error:
+        logger.error("Data collection failed: %s", error)
+        return 0
+    finally:
+        fetcher.close()
+
+
+def run_analysis(db: LotteryDatabase) -> None:
+    """Run statistical analysis and print summary.
+
+    Args:
+        db: Active database connection with collected data.
+    """
+    try:
+        from src.analysis.statistics import LotteryStatistics
+    except ImportError:
+        logger.error("Analysis module not found. Skipping analysis.")
+        return
+
+    rounds = db.get_all_rounds()
+    if not rounds:
+        logger.warning("No data in database. Run 'collect' first.")
+        return
+
+    stats = LotteryStatistics(rounds)
+    print(stats.print_summary())
+
+
+def run_prediction(db: LotteryDatabase) -> None:
+    """Run prediction engine and display results.
+
+    Args:
+        db: Active database connection with collected data.
+    """
+    try:
+        from src.analysis.predictor import LotteryPredictor
+    except ImportError:
+        logger.error("Prediction module not found. Skipping prediction.")
+        return
+
+    rounds = db.get_all_rounds()
+    if len(rounds) < 10:
+        logger.warning("Need at least 10 rounds for prediction. Have %d.", len(rounds))
+        return
+
+    predictor = LotteryPredictor(rounds)
+    prediction = predictor.predict()
+    print(predictor.print_prediction(prediction))
+
+
+def export_data(db: LotteryDatabase) -> None:
+    """Export all data to JSON file.
+
+    Args:
+        db: Active database connection.
+    """
+    count = db.export_to_json(EXPORT_PATH)
+    logger.info("Exported %d rounds to %s", count, EXPORT_PATH)
+
+
+def main() -> None:
+    """Parse CLI arguments and execute requested command."""
+    parser = argparse.ArgumentParser(
+        description="연금복권720+ 데이터 수집 및 예측 시스템",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+사용 예시:
+  python main.py collect          데이터 수집
+  python main.py analyze          통계 분석
+  python main.py predict          다음 회차 예측
+  python main.py all              수집 + 분석 + 예측
+  python main.py export           JSON 내보내기
+        """,
+    )
+    parser.add_argument(
+        "command",
+        choices=["collect", "analyze", "predict", "all", "export"],
+        help="실행할 명령",
+    )
+    args = parser.parse_args()
+
+    db = LotteryDatabase()
+    try:
+        if args.command in ("collect", "all"):
+            collect_data(db)
+
+        if args.command in ("analyze", "all"):
+            run_analysis(db)
+
+        if args.command in ("predict", "all"):
+            run_prediction(db)
+
+        if args.command == "export":
+            export_data(db)
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+        sys.exit(1)
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    main()
