@@ -104,16 +104,16 @@ def run_prediction(db: LotteryDatabase) -> None:
     Args:
         db: Active database connection with collected data.
     """
-    from src.analysis.predictor import LotteryPredictor
+    from src.analysis.prediction_report import PredictionReporter
 
-    rounds = db.get_all_round_sets() or db.get_all_rounds()
-    if len(rounds) < 10:
-        logger.warning("Need at least 10 rounds for prediction. Have %d.", len(rounds))
+    rounds = db.get_all_rounds()
+    if len(rounds) < 60:
+        logger.warning("Need at least 60 rounds. Have %d.", len(rounds))
         return
 
-    predictor = LotteryPredictor(rounds)
-    prediction = predictor.predict()
-    print(predictor.print_prediction(prediction))
+    reporter = PredictionReporter(rounds)
+    report = reporter.generate_report()
+    print(reporter.print_report(report))
 def run_backtest(db: LotteryDatabase) -> None:
     """Run backtesting across all strategies.
 
