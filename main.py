@@ -41,40 +41,10 @@ def collect_data(db: LotteryDatabase) -> int:
         inserted = db.insert_rounds(rounds)
         latest = max(r.round_number for r in rounds)
         db.save_progress(latest)
-
-        missing_rounds = db.get_round_numbers_missing_sets()
-        logger.info("Fetching detailed winning sets for %d rounds...", len(missing_rounds))
-        inserted_sets = 0
-
-        for idx, round_number in enumerate(missing_rounds, start=1):
-            try:
-                detail_json = fetcher.fetch_round_detail(round_number)
-                round_sets = LotteryParser.parse_all_sets(detail_json)
-                winner_counts = _extract_winner_counts_by_set(detail_json)
-
-                rows_to_insert = [
-                    (round_data, set_number, winner_counts.get(set_number, 0))
-                    for set_number, round_data in enumerate(round_sets, start=1)
-                ]
-                inserted_sets += db.insert_round_sets(rows_to_insert)
-                db.save_progress(round_number)
-
-                if idx % 10 == 0 or idx == len(missing_rounds):
-                    logger.info(
-                        "Detailed set progress: %d/%d rounds (set rows in DB: %d)",
-                        idx,
-                        len(missing_rounds),
-                        db.get_round_set_count(),
-                    )
-            except FetchError as error:
-                logger.warning("Skipping detail fetch for round %d: %s", round_number, error)
-
         logger.info(
-            "Inserted %d new rounds, %d new set rows (total rounds: %d, total set rows: %d, latest: %d)",
+            "Inserted %d new rounds (total in DB: %d, latest: %d)",
             inserted,
-            inserted_sets,
             db.get_round_count(),
-            db.get_round_set_count(),
             latest,
         )
         return inserted
@@ -91,7 +61,7 @@ def run_analysis(db: LotteryDatabase) -> None:
     """
     from src.analysis.statistics import LotteryStatistics
 
-    rounds = db.get_all_round_sets() or db.get_all_rounds()
+    rounds = db.get_all_rounds()
     if not rounds:
         logger.warning("No data in database. Run 'collect' first.")
         return
@@ -202,7 +172,7 @@ def run_advanced(db: LotteryDatabase) -> None:
     """
     from src.analysis.advanced_stats import AdvancedAnalyzer
 
-    rounds = db.get_all_round_sets() or db.get_all_rounds()
+    rounds = db.get_all_rounds()
     if not rounds:
         logger.warning("No data in database. Run 'collect' first.")
         return
@@ -220,7 +190,7 @@ def run_bayesian(db: LotteryDatabase) -> None:
     """
     from src.analysis.bayesian import BayesianPredictor
 
-    rounds = db.get_all_round_sets() or db.get_all_rounds()
+    rounds = db.get_all_rounds()
     if len(rounds) < 10:
         logger.warning("Need at least 10 rounds. Have %d.", len(rounds))
         return
@@ -238,7 +208,7 @@ def run_ensemble(db: LotteryDatabase) -> None:
     """
     from src.analysis.feature_engine import DynamicEnsemble
 
-    rounds = db.get_all_round_sets() or db.get_all_rounds()
+    rounds = db.get_all_rounds()
     if len(rounds) < 60:
         logger.warning("Need at least 60 rounds. Have %d.", len(rounds))
         return
