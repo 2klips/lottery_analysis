@@ -1,5 +1,6 @@
 """Unit tests for lottery database storage."""
 
+from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
 
@@ -22,7 +23,7 @@ def sample_round() -> PensionRound:
 
 
 @pytest.fixture()
-def db(tmp_path: Path) -> LotteryDatabase:
+def db(tmp_path: Path) -> Iterator[LotteryDatabase]:
     """Create an in-memory-like database in temp directory."""
     db_path = tmp_path / "test.db"
     database = LotteryDatabase(db_path=db_path)
@@ -103,3 +104,55 @@ class TestLotteryDatabase:
         count = db.export_to_json(export_path)
         assert count == 1
         assert export_path.exists()
+
+    def test_insert_round_set_and_count(self, db: LotteryDatabase, sample_round: PensionRound) -> None:
+        """Insert detailed set row and count it."""
+        assert db.insert_round_set(sample_round, set_number=1, winner_count=3) is True
+        assert db.get_round_set_count() == 1
+
+    def test_insert_round_sets_bulk(self, db: LotteryDatabase) -> None:
+        """Bulk insert round set rows."""
+        set1 = PensionRound(
+            round_number=2,
+            draw_date=date(2020, 5, 14),
+            group=1,
+            numbers=[1, 1, 1, 1, 1, 1],
+            bonus_numbers=[2, 2, 2, 2, 2, 2],
+        )
+        set2 = PensionRound(
+            round_number=2,
+            draw_date=date(2020, 5, 14),
+            group=2,
+            numbers=[3, 3, 3, 3, 3, 3],
+            bonus_numbers=[4, 4, 4, 4, 4, 4],
+        )
+        inserted = db.insert_round_sets([(set1, 1, 0), (set2, 2, 0)])
+        assert inserted == 2
+        assert db.get_round_set_count() == 2
+
+    def test_get_all_round_sets_sorted(self, db: LotteryDatabase) -> None:
+        """Detailed sets are sorted by round and set number."""
+        r10_set2 = PensionRound(
+            round_number=10,
+            draw_date=date(2020, 7, 9),
+            group=2,
+            numbers=[2, 0, 0, 0, 0, 2],
+            bonus_numbers=[2, 2, 2, 2, 2, 2],
+        )
+        r9_set1 = PensionRound(
+            round_number=9,
+            draw_date=date(2020, 7, 2),
+            group=1,
+            numbers=[1, 0, 0, 0, 0, 1],
+            bonus_numbers=[1, 1, 1, 1, 1, 1],
+        )
+        r10_set1 = PensionRound(
+            round_number=10,
+            draw_date=date(2020, 7, 9),
+            group=1,
+            numbers=[1, 0, 0, 0, 0, 1],
+            bonus_numbers=[1, 1, 1, 1, 1, 1],
+        )
+        db.insert_round_sets([(r10_set2, 2, 0), (r9_set1, 1, 0), (r10_set1, 1, 0)])
+        result = db.get_all_round_sets()
+        assert [(item.round_number, item.group) for item in result] == [(9, 1), (10, 1), (10, 2)]

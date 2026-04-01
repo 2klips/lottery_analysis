@@ -100,6 +100,68 @@ class LotteryParser:
         return {"round_number": round_number, "winner_ranks": cleaned_records}
 
     @staticmethod
+    def parse_all_sets(json_text: str) -> list[PensionRound]:
+        """Parse all 6 winning number sets from the detail API response.
+
+        Groups the 48 records into 6 sets of 8, extracts 1등 number + bonus from
+        each set, and returns valid ``PensionRound`` objects.
+
+        Args:
+            json_text: Raw JSON response text from detail endpoint.
+
+        Returns:
+            Up to 6 parsed winning sets for a single round.
+        """
+        records = LotteryParser._extract_result_list(json_text)
+        dict_records = [record for record in records if isinstance(record, dict)]
+        rounds: list[PensionRound] = []
+
+        for start_idx in range(0, len(dict_records), 8):
+            set_records = dict_records[start_idx:start_idx + 8]
+            if len(set_records) < 8:
+                continue
+
+            first_rank = next(
+                (
+                    record
+                    for record in set_records
+                    if record.get("wnBndNo") not in (None, "")
+                ),
+                None,
+            )
+            if first_rank is None:
+                continue
+
+            bonus = next(
+                (
+                    record
+                    for record in set_records
+                    if LotteryParser._is_bonus_record(record)
+                ),
+                set_records[-1],
+            )
+
+            numbers_str = str(first_rank.get("wnRnkVl", ""))
+            bonus_str = str(bonus.get("wnRnkVl", ""))
+            if len(numbers_str) != 6 or len(bonus_str) != 6:
+                continue
+
+            data = {
+                "psltEpsd": first_rank.get("psltEpsd"),
+                "psltRflYmd": first_rank.get("psltRflYmd"),
+                "wnBndNo": first_rank.get("wnBndNo"),
+                "wnRnkVl": numbers_str,
+                "bnsRnkVl": bonus_str,
+            }
+
+            try:
+                rounds.append(PensionRound.from_api_response(data))
+            except (KeyError, TypeError, ValueError) as error:
+                logger.warning("Skipping invalid detailed set record: %s", error)
+
+        return rounds
+
+    @staticmethod
     def _extract_result_list(json_text: str) -> list[object]:
         """Extract result list from varying API response structures.
 
@@ -132,3 +194,20 @@ class LotteryParser:
                 return nested_result
 
         return []
+
+    @staticmethod
+    def _is_bonus_record(record: dict[object, object]) -> bool:
+        """Return whether a detail row represents bonus digits."""
+        wn_rank_value = str(record.get("wnRnkVl", ""))
+        if len(wn_rank_value) != 6:
+            return False
+
+        wn_bnd_no = record.get("wnBndNo")
+        if wn_bnd_no not in (None, ""):
+            return False
+
+        wn_sq_no = record.get("wnSqNo")
+        if str(wn_sq_no) == "8":
+            return True
+
+        return str(record.get("wnAmt")) == "120000000"

@@ -77,3 +77,53 @@ class TestParseLatestRound:
         """Missing tag returns None."""
         html = "<html><body>nothing</body></html>"
         assert LotteryParser.parse_latest_round(html) is None
+
+
+class TestParseAllSets:
+    """Test LotteryParser.parse_all_sets."""
+
+    @staticmethod
+    def _build_set(
+        round_number: int,
+        draw_date: str,
+        group: str,
+        first: str,
+        bonus: str,
+    ) -> list[dict[str, object]]:
+        records: list[dict[str, object]] = []
+        for rank in range(1, 9):
+            records.append(
+                {
+                    "psltEpsd": round_number,
+                    "psltRflYmd": draw_date,
+                    "wnSqNo": rank,
+                    "wnBndNo": group if rank == 1 else None,
+                    "wnRnkVl": first if rank < 8 else bonus,
+                    "wnAmt": 120000000 if rank == 8 else 0,
+                }
+            )
+        return records
+
+    def test_parse_all_sets_success(self) -> None:
+        """Parses all valid sets from detail payload."""
+        payload = {
+            "data": {
+                "result": self._build_set(308, "20260401", "1", "123456", "654321")
+                + self._build_set(308, "20260401", "2", "987654", "456789")
+            }
+        }
+        rounds = LotteryParser.parse_all_sets(json.dumps(payload))
+        assert len(rounds) == 2
+        assert rounds[0].group == 1
+        assert rounds[0].numbers == [1, 2, 3, 4, 5, 6]
+        assert rounds[0].bonus_numbers == [6, 5, 4, 3, 2, 1]
+        assert rounds[1].group == 2
+
+    def test_parse_all_sets_fallback_to_8th_row_bonus(self) -> None:
+        """Falls back to 8th row when bonus marker is missing."""
+        records = self._build_set(308, "20260401", "3", "111111", "222222")
+        records[-1]["wnSqNo"] = 7
+        records[-1]["wnAmt"] = 0
+        rounds = LotteryParser.parse_all_sets(json.dumps({"result": records}))
+        assert len(rounds) == 1
+        assert rounds[0].bonus_numbers == [2, 2, 2, 2, 2, 2]

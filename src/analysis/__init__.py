@@ -6,6 +6,9 @@ from .backtester import LotteryBacktester
 from .markov import MarkovChainPredictor
 from .monte_carlo import MonteCarloSimulator
 from .lstm_predictor import NeuralPredictor
+from .advanced_stats import AdvancedAnalyzer
+from .bayesian import BayesianPredictor
+from .feature_engine import DynamicEnsemble, FeatureEngineer
 
 __all__ = [
     "LotteryStatistics",
@@ -14,4 +17,8 @@ __all__ = [
     "MarkovChainPredictor",
     "MonteCarloSimulator",
     "NeuralPredictor",
+    "AdvancedAnalyzer",
+    "BayesianPredictor",
+    "DynamicEnsemble",
+    "FeatureEngineer",
 ]

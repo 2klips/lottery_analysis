@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -40,10 +41,40 @@ def collect_data(db: LotteryDatabase) -> int:
         inserted = db.insert_rounds(rounds)
         latest = max(r.round_number for r in rounds)
         db.save_progress(latest)
+
+        missing_rounds = db.get_round_numbers_missing_sets()
+        logger.info("Fetching detailed winning sets for %d rounds...", len(missing_rounds))
+        inserted_sets = 0
+
+        for idx, round_number in enumerate(missing_rounds, start=1):
+            try:
+                detail_json = fetcher.fetch_round_detail(round_number)
+                round_sets = LotteryParser.parse_all_sets(detail_json)
+                winner_counts = _extract_winner_counts_by_set(detail_json)
+
+                rows_to_insert = [
+                    (round_data, set_number, winner_counts.get(set_number, 0))
+                    for set_number, round_data in enumerate(round_sets, start=1)
+                ]
+                inserted_sets += db.insert_round_sets(rows_to_insert)
+                db.save_progress(round_number)
+
+                if idx % 10 == 0 or idx == len(missing_rounds):
+                    logger.info(
+                        "Detailed set progress: %d/%d rounds (set rows in DB: %d)",
+                        idx,
+                        len(missing_rounds),
+                        db.get_round_set_count(),
+                    )
+            except FetchError as error:
+                logger.warning("Skipping detail fetch for round %d: %s", round_number, error)
+
         logger.info(
-            "Inserted %d new rounds (total in DB: %d, latest: %d)",
+            "Inserted %d new rounds, %d new set rows (total rounds: %d, total set rows: %d, latest: %d)",
             inserted,
+            inserted_sets,
             db.get_round_count(),
+            db.get_round_set_count(),
             latest,
         )
         return inserted
@@ -52,8 +83,6 @@ def collect_data(db: LotteryDatabase) -> int:
         return 0
     finally:
         fetcher.close()
-
-
 def run_analysis(db: LotteryDatabase) -> None:
     """Run statistical analysis and print summary.
 
@@ -62,15 +91,13 @@ def run_analysis(db: LotteryDatabase) -> None:
     """
     from src.analysis.statistics import LotteryStatistics
 
-    rounds = db.get_all_rounds()
+    rounds = db.get_all_round_sets() or db.get_all_rounds()
     if not rounds:
         logger.warning("No data in database. Run 'collect' first.")
         return
 
     stats = LotteryStatistics(rounds)
     print(stats.print_summary())
-
-
 def run_prediction(db: LotteryDatabase) -> None:
     """Run prediction engine and display results.
 
@@ -79,7 +106,7 @@ def run_prediction(db: LotteryDatabase) -> None:
     """
     from src.analysis.predictor import LotteryPredictor
 
-    rounds = db.get_all_rounds()
+    rounds = db.get_all_round_sets() or db.get_all_rounds()
     if len(rounds) < 10:
         logger.warning("Need at least 10 rounds for prediction. Have %d.", len(rounds))
         return
@@ -87,8 +114,6 @@ def run_prediction(db: LotteryDatabase) -> None:
     predictor = LotteryPredictor(rounds)
     prediction = predictor.predict()
     print(predictor.print_prediction(prediction))
-
-
 def run_backtest(db: LotteryDatabase) -> None:
     """Run backtesting across all strategies.
 
@@ -106,8 +131,6 @@ def run_backtest(db: LotteryDatabase) -> None:
     bt = LotteryBacktester(rounds)
     results = bt.run_all()
     print(bt.print_report(results))
-
-
 def run_markov(db: LotteryDatabase) -> None:
     """Run Markov Chain prediction.
 
@@ -123,8 +146,6 @@ def run_markov(db: LotteryDatabase) -> None:
 
     mc = MarkovChainPredictor(rounds)
     print(mc.print_summary())
-
-
 def run_montecarlo(db: LotteryDatabase) -> None:
     """Run Monte Carlo simulation.
 
@@ -141,8 +162,6 @@ def run_montecarlo(db: LotteryDatabase) -> None:
     sim = MonteCarloSimulator(rounds, n_simulations=100_000)
     result = sim.simulate()
     print(sim.print_report(result))
-
-
 def run_neural(db: LotteryDatabase) -> None:
     """Train and run neural network prediction.
 
@@ -167,8 +186,6 @@ def run_neural(db: LotteryDatabase) -> None:
     print(f"1등 번호: {' '.join(str(d) for d in result.numbers)}")
     print(f"보너스:   {' '.join(str(d) for d in result.bonus_numbers)}")
     print(f"신뢰도: {result.confidence:.1%}")
-
-
 def export_data(db: LotteryDatabase) -> None:
     """Export all data to JSON file.
 
@@ -177,14 +194,95 @@ def export_data(db: LotteryDatabase) -> None:
     """
     count = db.export_to_json(EXPORT_PATH)
     logger.info("Exported %d rounds to %s", count, EXPORT_PATH)
+def run_advanced(db: LotteryDatabase) -> None:
+    """Run advanced statistical analysis.
+
+    Args:
+        db: Active database connection with collected data.
+    """
+    from src.analysis.advanced_stats import AdvancedAnalyzer
+
+    rounds = db.get_all_round_sets() or db.get_all_rounds()
+    if not rounds:
+        logger.warning("No data in database. Run 'collect' first.")
+        return
+
+    analyzer = AdvancedAnalyzer(rounds)
+    report = analyzer.full_analysis()
+    print(analyzer.print_report(report))
+
+
+def run_bayesian(db: LotteryDatabase) -> None:
+    """Run Bayesian prediction.
+
+    Args:
+        db: Active database connection with collected data.
+    """
+    from src.analysis.bayesian import BayesianPredictor
+
+    rounds = db.get_all_round_sets() or db.get_all_rounds()
+    if len(rounds) < 10:
+        logger.warning("Need at least 10 rounds. Have %d.", len(rounds))
+        return
+
+    predictor = BayesianPredictor(rounds, decay=0.97)
+    pred = predictor.predict()
+    print(predictor.print_prediction(pred))
+
+
+def run_ensemble(db: LotteryDatabase) -> None:
+    """Run dynamic ensemble with backtest-based weights.
+
+    Args:
+        db: Active database connection with collected data.
+    """
+    from src.analysis.feature_engine import DynamicEnsemble
+
+    rounds = db.get_all_round_sets() or db.get_all_rounds()
+    if len(rounds) < 60:
+        logger.warning("Need at least 60 rounds. Have %d.", len(rounds))
+        return
+
+    logger.info("Calculating dynamic ensemble weights on %d rounds...", len(rounds))
+    ensemble = DynamicEnsemble(rounds, eval_window=50)
+    ensemble.calculate_weights()
+    print(ensemble.print_weights())
+    group, numbers, bonus, conf = ensemble.weighted_predict()
+    print(f"\n[동적 앙상블 예측]")
+    print(f"조: {group}조")
+    print(f"1등 번호: {' '.join(str(d) for d in numbers)}")
+    print(f"보너스:   {' '.join(str(d) for d in bonus)}")
+    print(f"신뢰도: {conf:.1%}")
 
 
 COMMANDS = [
-    "collect", "analyze", "predict", "backtest",
-    "markov", "montecarlo", "neural", "all", "export", "dashboard",
+    "collect", "analyze", "predict", "backtest", "markov", "montecarlo",
+    "neural", "advanced", "bayesian", "ensemble", "all", "export", "dashboard",
 ]
+def _extract_winner_counts_by_set(detail_json: str) -> dict[int, int]:
+    """Extract winner counts by set number from detail API payload."""
+    try:
+        payload = json.loads(detail_json)
+    except json.JSONDecodeError:
+        return {}
 
+    raw_records = payload.get("data", {}).get("result", [])
+    if not isinstance(raw_records, list):
+        return {}
 
+    records = [record for record in raw_records if isinstance(record, dict)]
+    counts: dict[int, int] = {}
+    for start_idx in range(0, len(records), 8):
+        set_number = (start_idx // 8) + 1
+        set_rows = records[start_idx:start_idx + 8]
+        first_rank = next((row for row in set_rows if row.get("wnBndNo") not in (None, "")), None)
+        if first_rank is None:
+            continue
+        try:
+            counts[set_number] = int(first_rank.get("wnTotalCnt", 0))
+        except (TypeError, ValueError):
+            counts[set_number] = 0
+    return counts
 def main() -> None:
     """Parse CLI arguments and execute requested command."""
     parser = argparse.ArgumentParser(
@@ -199,6 +297,9 @@ def main() -> None:
   python main.py markov        마르코프 체인 예측
   python main.py montecarlo    몬테카를로 시뮬레이션
   python main.py neural        신경망 예측
+  python main.py advanced      고급 통계 분석 (엔트로피/상관관계)
+  python main.py bayesian      베이지안 예측
+  python main.py ensemble      동적 앙상블 예측
   python main.py all           수집 + 분석 + 예측
   python main.py export        JSON 내보내기
   python main.py dashboard     Streamlit 대시보드 실행
@@ -234,6 +335,15 @@ def main() -> None:
 
         if args.command == "neural":
             run_neural(db)
+
+        if args.command == "advanced":
+            run_advanced(db)
+
+        if args.command == "bayesian":
+            run_bayesian(db)
+
+        if args.command == "ensemble":
+            run_ensemble(db)
 
         if args.command == "export":
             export_data(db)
