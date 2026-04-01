@@ -60,11 +60,7 @@ def run_analysis(db: LotteryDatabase) -> None:
     Args:
         db: Active database connection with collected data.
     """
-    try:
-        from src.analysis.statistics import LotteryStatistics
-    except ImportError:
-        logger.error("Analysis module not found. Skipping analysis.")
-        return
+    from src.analysis.statistics import LotteryStatistics
 
     rounds = db.get_all_rounds()
     if not rounds:
@@ -81,11 +77,7 @@ def run_prediction(db: LotteryDatabase) -> None:
     Args:
         db: Active database connection with collected data.
     """
-    try:
-        from src.analysis.predictor import LotteryPredictor
-    except ImportError:
-        logger.error("Prediction module not found. Skipping prediction.")
-        return
+    from src.analysis.predictor import LotteryPredictor
 
     rounds = db.get_all_rounds()
     if len(rounds) < 10:
@@ -95,6 +87,86 @@ def run_prediction(db: LotteryDatabase) -> None:
     predictor = LotteryPredictor(rounds)
     prediction = predictor.predict()
     print(predictor.print_prediction(prediction))
+
+
+def run_backtest(db: LotteryDatabase) -> None:
+    """Run backtesting across all strategies.
+
+    Args:
+        db: Active database connection with collected data.
+    """
+    from src.analysis.backtester import LotteryBacktester
+
+    rounds = db.get_all_rounds()
+    if len(rounds) < 60:
+        logger.warning("Need at least 60 rounds for backtest. Have %d.", len(rounds))
+        return
+
+    logger.info("Running backtest on %d rounds...", len(rounds))
+    bt = LotteryBacktester(rounds)
+    results = bt.run_all()
+    print(bt.print_report(results))
+
+
+def run_markov(db: LotteryDatabase) -> None:
+    """Run Markov Chain prediction.
+
+    Args:
+        db: Active database connection with collected data.
+    """
+    from src.analysis.markov import MarkovChainPredictor
+
+    rounds = db.get_all_rounds()
+    if len(rounds) < 10:
+        logger.warning("Need at least 10 rounds. Have %d.", len(rounds))
+        return
+
+    mc = MarkovChainPredictor(rounds)
+    print(mc.print_summary())
+
+
+def run_montecarlo(db: LotteryDatabase) -> None:
+    """Run Monte Carlo simulation.
+
+    Args:
+        db: Active database connection with collected data.
+    """
+    from src.analysis.monte_carlo import MonteCarloSimulator
+
+    rounds = db.get_all_rounds()
+    if not rounds:
+        logger.warning("No data in database. Run 'collect' first.")
+        return
+
+    sim = MonteCarloSimulator(rounds, n_simulations=100_000)
+    result = sim.simulate()
+    print(sim.print_report(result))
+
+
+def run_neural(db: LotteryDatabase) -> None:
+    """Train and run neural network prediction.
+
+    Args:
+        db: Active database connection with collected data.
+    """
+    from src.analysis.lstm_predictor import NeuralPredictor
+
+    rounds = db.get_all_rounds()
+    if len(rounds) < 30:
+        logger.warning("Need at least 30 rounds for neural prediction. Have %d.", len(rounds))
+        return
+
+    logger.info("Training neural models on %d rounds...", len(rounds))
+    predictor = NeuralPredictor(rounds)
+    accuracy = predictor.train()
+    for key, val in accuracy.items():
+        logger.info("  %s accuracy: %.2f%%", key, val * 100)
+    result = predictor.predict()
+    print(f"\n[Neural Network 예측]")
+    print(f"조: {result.group}조")
+    print(f"1등 번호: {' '.join(str(d) for d in result.numbers)}")
+    print(f"보너스:   {' '.join(str(d) for d in result.bonus_numbers)}")
+    print(f"신뢰도: {result.confidence:.1%}")
 
 
 def export_data(db: LotteryDatabase) -> None:
@@ -107,6 +179,12 @@ def export_data(db: LotteryDatabase) -> None:
     logger.info("Exported %d rounds to %s", count, EXPORT_PATH)
 
 
+COMMANDS = [
+    "collect", "analyze", "predict", "backtest",
+    "markov", "montecarlo", "neural", "all", "export", "dashboard",
+]
+
+
 def main() -> None:
     """Parse CLI arguments and execute requested command."""
     parser = argparse.ArgumentParser(
@@ -114,19 +192,25 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 사용 예시:
-  python main.py collect          데이터 수집
-  python main.py analyze          통계 분석
-  python main.py predict          다음 회차 예측
-  python main.py all              수집 + 분석 + 예측
-  python main.py export           JSON 내보내기
+  python main.py collect       데이터 수집
+  python main.py analyze       통계 분석
+  python main.py predict       앙상블 예측
+  python main.py backtest      전략 백테스트
+  python main.py markov        마르코프 체인 예측
+  python main.py montecarlo    몬테카를로 시뮬레이션
+  python main.py neural        신경망 예측
+  python main.py all           수집 + 분석 + 예측
+  python main.py export        JSON 내보내기
+  python main.py dashboard     Streamlit 대시보드 실행
         """,
     )
-    parser.add_argument(
-        "command",
-        choices=["collect", "analyze", "predict", "all", "export"],
-        help="실행할 명령",
-    )
+    parser.add_argument("command", choices=COMMANDS, help="실행할 명령")
     args = parser.parse_args()
+
+    if args.command == "dashboard":
+        import subprocess
+        subprocess.run([sys.executable, "-m", "streamlit", "run", "dashboard.py"])
+        return
 
     db = LotteryDatabase()
     try:
@@ -138,6 +222,18 @@ def main() -> None:
 
         if args.command in ("predict", "all"):
             run_prediction(db)
+
+        if args.command == "backtest":
+            run_backtest(db)
+
+        if args.command == "markov":
+            run_markov(db)
+
+        if args.command == "montecarlo":
+            run_montecarlo(db)
+
+        if args.command == "neural":
+            run_neural(db)
 
         if args.command == "export":
             export_data(db)
